@@ -54,9 +54,13 @@ class GRPOTrainer:
         prompts: PromptBatch,
         generation_config: GenerationConfig,
     ) -> tuple[AlgorithmStats, RolloutBatch]:
+        # The trainer deliberately stays thin: collect data, annotate it for the
+        # algorithm, recompute current-policy logprobs, then optimize.
         rollouts = self.rollout_generator.generate(prompts, generation_config)
         logprob_stats = None
         if self.config.verify_generator_logprobs:
+            # This catches drift between the backend that sampled tokens and the
+            # actor used for training before the update can hide the mismatch.
             logprob_stats = assert_actor_generator_logprobs_close(
                 self.actor,
                 rollouts,
@@ -64,6 +68,8 @@ class GRPOTrainer:
                 rtol=self.config.logprob_rtol,
             )
         rollouts = self.algorithm.prepare_rollouts(rollouts)
+        # GRPO compares the current policy against the policy that generated the
+        # rollout, so these are recomputed after sampling rather than reused.
         new_logprobs = self.actor.logprobs(rollouts.input_ids, rollouts.attention_mask)
         loss, stats = self.algorithm.loss(rollouts, new_logprobs)
         if logprob_stats is not None:
@@ -82,6 +88,8 @@ class GRPOTrainer:
         if self.config.max_grad_norm is not None:
             parameters = getattr(self.actor, "parameters", None)
             if parameters is not None:
+                # The Actor interface is backend-neutral, so gradient clipping is
+                # enabled only when the concrete actor exposes PyTorch parameters.
                 torch.nn.utils.clip_grad_norm_(parameters(), self.config.max_grad_norm)
         self.optimizer.step()
         return stats, rollouts

@@ -116,3 +116,5 @@ transformer backbones must be identical at initialization. For PPO, value
 estimation is isolated in an external value projection so logits/logprobs can be
 compared across actor, reference, and critic-backbone paths without hidden
 structural drift.
+
+For a guided tour through the codebase, start with [docs/learn-path.md](docs/learn-path.md).

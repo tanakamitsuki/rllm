@@ -50,6 +50,9 @@ class LocalRolloutGenerator(RolloutGenerator):
         metadata: list[dict[str, Any]] = []
 
         for group_id in range(prompts.batch_size):
+            # One prompt forms one GRPO group. Sampling several responses from
+            # that same prompt lets the algorithm compare siblings instead of
+            # depending on a learned value baseline.
             prompt_length = int(prompts.attention_mask[group_id].sum().item())
             if prompt_length <= 0:
                 raise ValueError("empty prompts are not supported")
@@ -77,12 +80,18 @@ class LocalRolloutGenerator(RolloutGenerator):
             input_ids[row, :length] = sequence
             attention_mask[row, :length] = 1
 
+        # Token logprobs are aligned to next-token labels, so the first generated
+        # token sits at column `prompt_length - 1`, predicted from the final
+        # prompt token. This offset is the easiest rollout bug to introduce.
         action_mask = torch.zeros((batch_size, max_len - 1), device=device, dtype=torch.bool)
         prompt_lengths_tensor = torch.tensor(prompt_lengths, device=device, dtype=torch.long)
         for row, prompt_length in enumerate(prompt_lengths):
             sequence_length = int(attention_mask[row].sum().item())
             action_mask[row, prompt_length - 1 : sequence_length - 1] = True
 
+        # Keep the logprobs from the actor that actually sampled the tokens.
+        # In future, `generation_actor` may be a separate serving backend; the
+        # trainer can compare these stored values against the train actor later.
         old_logprobs = self.generation_actor.logprobs(input_ids, attention_mask).detach()
         ref_logprobs = None
         if self.reference_policy is not None:
@@ -98,5 +107,7 @@ class LocalRolloutGenerator(RolloutGenerator):
             group_ids=torch.tensor(group_ids, device=device, dtype=torch.long),
             metadata=metadata,
         )
+        # Rewards are attached after the rollout tensors exist so rule functions
+        # can inspect both prompt metadata and the generated response slice.
         rewards = self.reward_provider.score(prompts, rollouts)
         return rollouts.with_updates(rewards=rewards)

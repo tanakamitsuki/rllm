@@ -81,6 +81,11 @@ class RolloutBatch:
     `input_ids` has shape `[batch, seq_len]`. Token logprob tensors have shape
     `[batch, seq_len - 1]`, aligned to labels `input_ids[:, 1:]`. `action_mask`
     selects generated response tokens in that label-aligned space.
+
+    Example: if a prompt has tokens `[10, 11]` and the model generates
+    `[20, 21]`, then `input_ids == [10, 11, 20, 21]` while logprob column `1`
+    scores token `20`. For that row, `action_mask` is true at columns `1` and
+    `2`, not at raw token positions `2` and `3`.
     """
 
     input_ids: torch.Tensor
@@ -147,6 +152,8 @@ class RolloutBatch:
 
     @property
     def response_lengths(self) -> torch.Tensor:
+        # Because `action_mask` already lives in label-aligned coordinates, its
+        # row sum is the number of generated tokens that participate in RL loss.
         return self.action_mask.sum(dim=1)
 
     def to(self, device: torch.device | str) -> "RolloutBatch":
@@ -190,4 +197,3 @@ class AlgorithmStats:
     clip_fraction: torch.Tensor | None = None
     mean_reward: torch.Tensor | None = None
     extra: Mapping[str, torch.Tensor] = field(default_factory=dict)
-

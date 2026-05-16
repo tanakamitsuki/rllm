@@ -108,6 +108,9 @@ def extract_marked_final_answer(text: str) -> int | None:
 
 
 def score_response(response_text: str, answer: int) -> ResponseScore:
+    # Score only the explicit final-answer channel. A correct number somewhere in
+    # the reasoning trace is not enough for this RLVR task because the model also
+    # needs to learn the requested output contract.
     predicted = extract_marked_final_answer(response_text)
     correct = predicted == answer
     return ResponseScore(
@@ -175,6 +178,9 @@ def set_trainable_scope(actor: HFCausalLMActor, scope: str) -> int:
         for parameter in actor.parameters():
             parameter.requires_grad_(True)
     else:
+        # The fast smoke-test mode updates only the LM head. It is not meant to
+        # maximize GSM8K quality; it keeps the first real run cheap enough to use
+        # as an end-to-end framework validation.
         for parameter in actor.parameters():
             parameter.requires_grad_(False)
         output_embeddings = actor.model.get_output_embeddings()
@@ -192,6 +198,8 @@ def evaluate_exact_match(
     examples: list[GSM8KExample],
     generation_config: GenerationConfig,
 ) -> tuple[float, list[tuple[str, str, int, int | None]]]:
+    # Greedy decoding makes before/after evaluation comparable; stochastic
+    # sampling is reserved for rollout collection where GRPO needs diversity.
     reward_provider = make_reward_provider(tokenizer)
     generator = LocalRolloutGenerator(
         actor,

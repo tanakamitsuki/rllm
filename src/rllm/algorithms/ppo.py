@@ -50,6 +50,8 @@ def terminal_rewards_to_token_rewards(
     for row in range(action_mask.shape[0]):
         action_positions = torch.nonzero(action_mask[row], as_tuple=False).flatten()
         if action_positions.numel() > 0:
+            # A scalar sequence reward is treated as arriving at termination.
+            # Earlier generated tokens receive credit later through GAE.
             rewards[row, int(action_positions[-1].item())] = terminal_rewards[row]
     return rewards * action_mask.to(dtype=terminal_rewards.dtype)
 
@@ -75,6 +77,8 @@ def generalized_advantage_estimation(
     for t in reversed(range(rewards.shape[1])):
         mask_t = action_mask[:, t].to(dtype=rewards.dtype)
         delta = rewards[:, t] + gamma * next_values * next_mask - values[:, t]
+        # Walking backward lets each token accumulate future reward while
+        # `next_mask` prevents leakage across padding and before-response tokens.
         last_gae = (delta + gamma * lam * last_gae * next_mask) * mask_t
         advantages[:, t] = last_gae
         next_values = values[:, t]

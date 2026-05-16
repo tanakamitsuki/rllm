@@ -37,6 +37,9 @@ class RuleRewardProvider(RewardProvider):
             group_id = int(rollouts.group_ids[row].item())
             prompt_length = int(rollouts.prompt_lengths[row].item())
             sequence_length = int(rollouts.attention_mask[row].sum().item())
+            # Reward functions receive clean prompt/response slices rather than
+            # padded batch tensors. Metadata is copied from the source prompt so
+            # deterministic RLVR tasks can carry labels such as target answers.
             prompt_ids = rollouts.input_ids[row, :prompt_length].detach().cpu()
             response_ids = rollouts.input_ids[row, prompt_length:sequence_length].detach().cpu()
             metadata = prompts.metadata[group_id] if prompts.metadata else {}
@@ -53,4 +56,3 @@ class RuleRewardProvider(RewardProvider):
                 )
             )
         return torch.tensor(rewards, device=rollouts.device, dtype=torch.float32)
-

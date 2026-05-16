@@ -123,6 +123,10 @@ class TorchCausalLMActor(nn.Module, Actor):
 
             was_finished = finished
             if eos_token_id is not None:
+                # Finished rows append padding while unfinished rows append the
+                # newly sampled token. Their attention entries become zero on
+                # later steps, preserving a rectangular batch without treating
+                # post-EOS padding as model actions.
                 next_token = torch.where(was_finished, torch.full_like(next_token, pad_token_id), next_token)
                 finished = finished | (next_token == eos_token_id)
 
@@ -196,6 +200,9 @@ def build_tiny_actor_critic(
         pad_token_id=config.pad_token_id,
         eos_token_id=config.eos_token_id,
     )
+    # Deep-copy the already initialized backbone instead of reinitializing a new
+    # one. This gives the critic the same parameter names, dtypes, shapes, and
+    # values at bit level while still allowing a distinct value head.
     critic_backbone = copy.deepcopy(actor_backbone)
     critic = TorchCausalLMCritic(critic_backbone, nn.Linear(config.hidden_size, 1))
     return actor, critic

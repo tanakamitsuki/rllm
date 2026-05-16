@@ -47,6 +47,9 @@ def compute_group_advantages(
         group_rewards = rewards[mask]
         mean = group_rewards.mean()
         std = group_rewards.std(unbiased=False)
+        # GRPO uses relative quality within a prompt group. If every sibling has
+        # the same reward, all normalized advantages become zero and that group
+        # intentionally contributes no policy signal.
         advantages[mask] = (group_rewards - mean) / (std + eps)
     return advantages
 
@@ -99,6 +102,8 @@ def grpo_loss(
     advantages = advantages.detach().to(device=new_logprobs.device, dtype=new_logprobs.dtype)
     ratio = torch.exp(new_logprobs - old_logprobs)
     clipped_ratio = ratio.clamp(1.0 - config.clip_ratio, 1.0 + config.clip_ratio)
+    # This is the PPO-style clipped surrogate, but with group-normalized
+    # sequence rewards replacing value-model advantages.
     surrogate = torch.minimum(ratio * advantages, clipped_ratio * advantages)
     policy_loss = -masked_mean(surrogate, mask)
 
@@ -141,6 +146,9 @@ class GRPO(RLAlgorithm):
             rollouts.group_ids,
             eps=self.config.advantage_eps,
         )
+        # Rewards arrive once per generated sequence; losses are token-level.
+        # Broadcast only onto generated tokens so prompt and padding positions do
+        # not affect the policy update.
         advantages = broadcast_sequence_advantages(sequence_advantages, rollouts.action_mask)
         return rollouts.with_updates(advantages=advantages)
 

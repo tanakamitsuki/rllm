@@ -50,6 +50,9 @@ class HFCausalLMActor(nn.Module, Actor):
         attention_mask = prompts.attention_mask.to(self.device)
         finished = torch.zeros(input_ids.shape[0], device=self.device, dtype=torch.bool)
 
+        # Keep a small PyTorch generation loop here rather than delegating to
+        # `transformers.generate()`: rollout accounting must use the same token
+        # path that later supplies `old_logprobs`.
         for _ in range(config.max_new_tokens):
             logits = self.forward_logits(input_ids, attention_mask)[:, -1, :] / config.temperature
             logits = apply_top_k(logits, config.top_k)
