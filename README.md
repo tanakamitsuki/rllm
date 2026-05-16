@@ -16,6 +16,7 @@ loading.
 - PPO loss and generalized advantage estimation utilities.
 - Bitwise identity checks for actor and critic transformer backbones.
 - Actor-versus-generator logprob drift diagnostics for rollout consistency.
+- Actor-versus-critic hidden-state drift diagnostics for backbone consistency.
 - End-to-end GRPO trainer coverage on deterministic and sampled tiny rule-reward tasks.
 - Examples for a tiny rule-reward GRPO run and a Qwen3 smoke test.
 

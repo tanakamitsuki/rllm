@@ -21,6 +21,8 @@ objects so it can reuse token logprobs, masks, reference KL, and reward plumbing
 - `rllm.rewards.rule` adapts deterministic Python reward functions.
 - `rllm.diagnostics.logprobs` compares generator-recorded rollout logprobs
   against actor recomputation on the same generated tokens.
+- `rllm.diagnostics.hidden_states` compares actor and critic backbone outputs
+  before their task-specific heads.
 
 ## Actor/Critic Invariant
 
@@ -35,6 +37,10 @@ The rollout path has a second numerical invariant: the generator backend records
 same sampled tokens. This is the early warning check for token alignment,
 attention-mask handling, or backend inference drift once rollout generation is
 served by a separate engine.
+
+Because the critic has a value head rather than an LM head, actor-versus-critic
+`logprobs` are not defined. Their comparable runtime invariant is equality of
+shared-backbone hidden states on the same non-padding tokens.
 
 ## Algorithm Behavior
 

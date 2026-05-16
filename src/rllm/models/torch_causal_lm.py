@@ -94,8 +94,11 @@ class TorchCausalLMActor(nn.Module, Actor):
         return next(self.parameters()).device
 
     def forward_logits(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        hidden = self.backbone(input_ids, attention_mask)
+        hidden = self.forward_hidden_states(input_ids, attention_mask)
         return self.lm_head(hidden)
+
+    def forward_hidden_states(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.backbone(input_ids, attention_mask)
 
     def logprobs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         logits = self.forward_logits(input_ids, attention_mask)
@@ -147,8 +150,11 @@ class TorchCausalLMCritic(nn.Module, Critic):
         return next(self.parameters()).device
 
     def values(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        hidden = self.backbone(input_ids, attention_mask)
+        hidden = self.forward_hidden_states(input_ids, attention_mask)
         return self.value_head(hidden[:, :-1, :]).squeeze(-1)
+
+    def forward_hidden_states(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.backbone(input_ids, attention_mask)
 
     def backbone_state_dict(self) -> Mapping[str, torch.Tensor]:
         return self.backbone.state_dict()

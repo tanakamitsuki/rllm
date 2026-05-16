@@ -34,6 +34,11 @@ class Actor(ABC):
     def backbone_state_dict(self) -> Mapping[str, torch.Tensor]:
         """Return the state dict for the transformer backbone only."""
 
+    def forward_hidden_states(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Return backbone hidden states when the backend exposes them."""
+
+        raise NotImplementedError(f"{type(self).__name__} does not expose backbone hidden states")
+
 
 class ReferencePolicy(ABC):
     """Frozen policy used to compute reference logprobs and KL penalties."""
@@ -64,6 +69,11 @@ class Critic(ABC):
     def backbone_state_dict(self) -> Mapping[str, torch.Tensor]:
         """Return the state dict for the transformer backbone only."""
 
+    def forward_hidden_states(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Return backbone hidden states when the backend exposes them."""
+
+        raise NotImplementedError(f"{type(self).__name__} does not expose backbone hidden states")
+
 
 class RewardProvider(ABC):
     """Scores generated responses."""
@@ -91,4 +101,3 @@ class RLAlgorithm(ABC):
     @abstractmethod
     def loss(self, rollouts: RolloutBatch, new_logprobs: torch.Tensor) -> tuple[torch.Tensor, AlgorithmStats]:
         """Compute the differentiable objective for the latest policy."""
-
