@@ -27,6 +27,7 @@ from rllm.trainers.grpo import GRPOTrainer, GRPOTrainerConfig
 
 DEFAULT_DATASET = Path(__file__).with_name("data") / "arithmetic_rlvr.jsonl"
 INTEGER_PATTERN = re.compile(r"-?\d+")
+STRICT_INTEGER_PATTERN = re.compile(r"^\s*-?\d+\s*[.!]?\s*$")
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=4)
-    parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
@@ -80,9 +81,13 @@ def load_dataset(path: Path) -> list[ArithmeticExample]:
     return examples
 
 
-def extract_first_integer(text: str) -> int | None:
-    match = INTEGER_PATTERN.search(text.replace(",", ""))
-    return None if match is None else int(match.group(0))
+def extract_last_integer(text: str) -> int | None:
+    matches = INTEGER_PATTERN.findall(text.replace(",", ""))
+    return None if not matches else int(matches[-1])
+
+
+def is_strict_integer_answer(text: str) -> bool:
+    return STRICT_INTEGER_PATTERN.fullmatch(text.replace(",", "")) is not None
 
 
 def format_prompt(tokenizer: object, question: str) -> str:
@@ -127,10 +132,10 @@ def make_reward_provider(tokenizer: object) -> RuleRewardProvider:
     def reward_fn(example: RewardExample) -> float:
         answer = int(example.metadata["answer"])
         response_text = tokenizer.decode(example.response_ids, skip_special_tokens=True).strip()
-        predicted = extract_first_integer(response_text)
+        predicted = extract_last_integer(response_text)
         if predicted == answer:
             return 1.0
-        if predicted is not None:
+        if predicted is not None and is_strict_integer_answer(response_text):
             return 0.1
         return 0.0
 
@@ -174,7 +179,7 @@ def evaluate_exact_match(
         prompt_length = int(rollouts.prompt_lengths[0].item())
         response_ids = rollouts.input_ids[0, prompt_length:response_length]
         response_text = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
-        predicted = extract_first_integer(response_text)
+        predicted = extract_last_integer(response_text)
         correct += int(predicted == row.answer)
         samples.append((row.question, response_text, row.answer))
     return correct / len(examples), samples
@@ -260,11 +265,15 @@ def main() -> None:
         prompts = build_prompt_batch(batch, tokenizer, device=args.device)
         stats, _ = trainer.step(prompts, sample_config)
         diff = float(stats.extra["generator_logprob_max_abs_diff"].item())
+        mean_abs_advantage = float(stats.extra["mean_abs_advantage"].item())
+        nonzero_advantage_fraction = float(stats.extra["nonzero_advantage_fraction"].item())
         reward = 0.0 if stats.mean_reward is None else float(stats.mean_reward.item())
         print(
             f"step={step + 1:02d} "
             f"loss={float(stats.loss):.4f} "
             f"mean_reward={reward:.3f} "
+            f"mean_abs_advantage={mean_abs_advantage:.3f} "
+            f"nonzero_advantage_fraction={nonzero_advantage_fraction:.3f} "
             f"generator_logprob_max_abs_diff={diff:.3e}"
         )
 

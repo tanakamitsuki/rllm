@@ -81,6 +81,9 @@ python examples/train_qwen3_arithmetic_grpo.py
 
 The fast default updates only the LM head. Use `--train-scope all` when you want
 to update the entire actor and have enough GPU memory for full fine-tuning.
+Watch `mean_abs_advantage` as well as `loss`: with GRPO, a scalar loss near zero
+can still have gradients, while `mean_abs_advantage=0` means the sampled group
+has no relative reward signal.
 
 ## Design Notes
 

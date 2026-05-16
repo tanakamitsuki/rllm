@@ -47,6 +47,7 @@ def test_grpo_loss_is_finite_and_prepares_advantages() -> None:
 
     assert torch.isfinite(loss)
     assert stats.policy_loss is not None
+    assert stats.extra["mean_abs_advantage"].item() > 0
+    assert stats.extra["nonzero_advantage_fraction"].item() > 0
     loss.backward()
     assert new_logprobs.grad is not None
-

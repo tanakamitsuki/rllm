@@ -110,6 +110,8 @@ def grpo_loss(
 
     loss = policy_loss + config.beta_kl * kl
     clip_fraction = masked_mean(((ratio - 1.0).abs() > config.clip_ratio).to(new_logprobs.dtype), mask)
+    mean_abs_advantage = masked_mean(advantages.abs(), mask)
+    nonzero_advantage_fraction = masked_mean((advantages.abs() > config.advantage_eps).to(new_logprobs.dtype), mask)
     mean_reward = None if rollouts.rewards is None else rollouts.rewards.mean()
     stats = AlgorithmStats(
         loss=loss.detach(),
@@ -117,6 +119,10 @@ def grpo_loss(
         kl=kl.detach(),
         clip_fraction=clip_fraction.detach(),
         mean_reward=None if mean_reward is None else mean_reward.detach(),
+        extra={
+            "mean_abs_advantage": mean_abs_advantage.detach(),
+            "nonzero_advantage_fraction": nonzero_advantage_fraction.detach(),
+        },
     )
     return loss, stats
 
@@ -140,4 +146,3 @@ class GRPO(RLAlgorithm):
 
     def loss(self, rollouts: RolloutBatch, new_logprobs: torch.Tensor) -> tuple[torch.Tensor, AlgorithmStats]:
         return grpo_loss(rollouts, new_logprobs, self.config)
-
