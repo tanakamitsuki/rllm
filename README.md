@@ -35,6 +35,12 @@ For the Qwen smoke test, install the optional runtime helpers too:
 python -m pip install -e .[dev,qwen]
 ```
 
+For real-dataset runs, add the Hugging Face `datasets` dependency:
+
+```powershell
+python -m pip install -e .[dev,qwen,realdata]
+```
+
 ## Quick Shape
 
 ```python
@@ -90,6 +96,15 @@ the parsed answer, correctness, format compliance, and assigned reward. Use
 `--print-rollouts 0` to silence them. When several prompts share a batch, the
 printed samples are interleaved across groups and the script prints per-group
 reward summaries so one prompt does not hide behind another in the log.
+
+For a short real-dataset GRPO validation on a tiny GSM8K slice:
+
+```powershell
+python examples/train_qwen3_gsm8k_grpo.py --require-signal
+```
+
+This uses small train/eval slices by default so it stays practical for a first
+end-to-end run while still exercising real downloaded examples.
 
 ## Design Notes
 

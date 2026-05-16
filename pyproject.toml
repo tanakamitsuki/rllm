@@ -26,6 +26,9 @@ dev = [
 qwen = [
   "accelerate>=0.33"
 ]
+realdata = [
+  "datasets>=3.0"
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -37,4 +40,3 @@ markers = [
   "integration: tests that need external checkpoints or network/cache access",
   "slow: longer-running validation scenarios"
 ]
-
