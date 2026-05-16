@@ -23,7 +23,6 @@ from rllm.rollouts.local import LocalRolloutConfig, LocalRolloutGenerator
 from rllm.trainers.grpo import GRPOTrainer, GRPOTrainerConfig
 
 
-INTEGER_PATTERN = re.compile(r"-?\d[\d,]*")
 FINAL_ANSWER_PATTERN = re.compile(r"####\s*(-?\d[\d,]*)")
 
 
@@ -36,6 +35,7 @@ class GSM8KExample:
 @dataclass(frozen=True)
 class ResponseScore:
     predicted: int | None
+    has_final_marker: bool
     correct: bool
     reward: float
 
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-new-tokens", type=int, default=96)
+    parser.add_argument("--max-new-tokens", type=int, default=192)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
@@ -102,21 +102,26 @@ def load_gsm8k_split(
     ]
 
 
-def extract_last_integer(text: str) -> int | None:
-    matches = INTEGER_PATTERN.findall(text)
+def extract_marked_final_answer(text: str) -> int | None:
+    matches = FINAL_ANSWER_PATTERN.findall(text)
     return None if not matches else int(matches[-1].replace(",", ""))
 
 
 def score_response(response_text: str, answer: int) -> ResponseScore:
-    predicted = extract_last_integer(response_text)
+    predicted = extract_marked_final_answer(response_text)
     correct = predicted == answer
-    return ResponseScore(predicted=predicted, correct=correct, reward=1.0 if correct else 0.0)
+    return ResponseScore(
+        predicted=predicted,
+        has_final_marker=predicted is not None,
+        correct=correct,
+        reward=1.0 if correct else 0.0,
+    )
 
 
 def format_prompt(tokenizer: object, question: str) -> str:
     content = (
-        "Solve the math word problem. "
-        "We only score the final numeric answer, so put the final answer at the end.\n\n"
+        "Solve the math word problem. You may show your work. "
+        "End your response with a final line exactly in this format: #### <integer>.\n\n"
         f"{question}"
     )
     messages = [{"role": "user", "content": content}]
@@ -269,6 +274,7 @@ def print_rollout_samples(
         print(
             f"- group={group_id} sample={generation_index} "
             f"target={answer} predicted={score.predicted} "
+            f"has_final_marker={score.has_final_marker} "
             f"correct={score.correct} reward={reward_text} "
             f"question={question!r} response={response_text!r}"
         )
@@ -396,4 +402,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

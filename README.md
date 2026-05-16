@@ -104,7 +104,10 @@ python examples/train_qwen3_gsm8k_grpo.py --require-signal
 ```
 
 This uses small train/eval slices by default so it stays practical for a first
-end-to-end run while still exercising real downloaded examples.
+end-to-end run while still exercising real downloaded examples. The GSM8K path
+requires responses to end with a `#### <integer>` final-answer marker and scores
+only that marker, which keeps truncated or ambiguous generations from receiving
+accidental credit.
 
 ## Design Notes
 
