@@ -73,6 +73,15 @@ checkpoint:
 python examples/qwen3_smoke.py --model-id Qwen/Qwen3-0.6B
 ```
 
+For a real short GRPO run on a bundled arithmetic RLVR dataset:
+
+```powershell
+python examples/train_qwen3_arithmetic_grpo.py
+```
+
+The fast default updates only the LM head. Use `--train-scope all` when you want
+to update the entire actor and have enough GPU memory for full fine-tuning.
+
 ## Design Notes
 
 The actor and critic are allowed to have different output heads, but their

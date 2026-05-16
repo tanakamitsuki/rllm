@@ -1,0 +1,267 @@
+"""Small end-to-end GRPO run on arithmetic RLVR prompts.
+
+Run with:
+    python examples/train_qwen3_arithmetic_grpo.py
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+import torch
+from transformers import AutoTokenizer
+
+from rllm.algorithms.grpo import GRPOConfig
+from rllm.core.types import GenerationConfig, PromptBatch
+from rllm.models.hf import HFCausalLMActor
+from rllm.rewards.rule import RewardExample, RuleRewardProvider
+from rllm.rollouts.local import LocalRolloutConfig, LocalRolloutGenerator
+from rllm.trainers.grpo import GRPOTrainer, GRPOTrainerConfig
+
+
+DEFAULT_DATASET = Path(__file__).with_name("data") / "arithmetic_rlvr.jsonl"
+INTEGER_PATTERN = re.compile(r"-?\d+")
+
+
+@dataclass(frozen=True)
+class ArithmeticExample:
+    question: str
+    answer: int
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model-id", default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--num-generations", type=int, default=4)
+    parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--train-scope",
+        choices=("lm_head", "all"),
+        default="lm_head",
+        help="`lm_head` is the fast default; `all` updates every actor parameter.",
+    )
+    return parser.parse_args()
+
+
+def load_dataset(path: Path) -> list[ArithmeticExample]:
+    examples: list[ArithmeticExample] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            examples.append(ArithmeticExample(question=str(row["question"]), answer=int(row["answer"])))
+    if not examples:
+        raise ValueError(f"dataset is empty: {path}")
+    return examples
+
+
+def extract_first_integer(text: str) -> int | None:
+    match = INTEGER_PATTERN.search(text.replace(",", ""))
+    return None if match is None else int(match.group(0))
+
+
+def format_prompt(tokenizer: object, question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if apply_chat_template is None:
+        return question
+    try:
+        return apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+
+def build_prompt_batch(
+    examples: Iterable[ArithmeticExample],
+    tokenizer: object,
+    *,
+    device: str,
+) -> PromptBatch:
+    rows = list(examples)
+    prompt_texts = [format_prompt(tokenizer, row.question) for row in rows]
+    encoded = tokenizer(
+        prompt_texts,
+        return_tensors="pt",
+        padding=True,
+        add_special_tokens=False,
+    )
+    metadata = [{"answer": row.answer, "question": row.question} for row in rows]
+    return PromptBatch(encoded["input_ids"], encoded["attention_mask"], metadata=metadata).to(device)
+
+
+def make_reward_provider(tokenizer: object) -> RuleRewardProvider:
+    def reward_fn(example: RewardExample) -> float:
+        answer = int(example.metadata["answer"])
+        response_text = tokenizer.decode(example.response_ids, skip_special_tokens=True).strip()
+        predicted = extract_first_integer(response_text)
+        if predicted == answer:
+            return 1.0
+        if predicted is not None:
+            return 0.1
+        return 0.0
+
+    return RuleRewardProvider(reward_fn)
+
+
+def set_trainable_scope(actor: HFCausalLMActor, scope: str) -> int:
+    if scope == "all":
+        for parameter in actor.parameters():
+            parameter.requires_grad_(True)
+    else:
+        for parameter in actor.parameters():
+            parameter.requires_grad_(False)
+        output_embeddings = actor.model.get_output_embeddings()
+        if output_embeddings is None:
+            raise ValueError("model does not expose output embeddings for `lm_head` training")
+        for parameter in output_embeddings.parameters():
+            parameter.requires_grad_(True)
+    return sum(parameter.numel() for parameter in actor.parameters() if parameter.requires_grad)
+
+
+@torch.no_grad()
+def evaluate_exact_match(
+    actor: HFCausalLMActor,
+    tokenizer: object,
+    examples: list[ArithmeticExample],
+    generation_config: GenerationConfig,
+) -> tuple[float, list[tuple[str, str, int]]]:
+    reward_provider = make_reward_provider(tokenizer)
+    generator = LocalRolloutGenerator(
+        actor,
+        reward_provider,
+        config=LocalRolloutConfig(num_generations=1),
+    )
+    correct = 0
+    samples: list[tuple[str, str, int]] = []
+    for row in examples:
+        prompts = build_prompt_batch([row], tokenizer, device=str(actor.device))
+        rollouts = generator.generate(prompts, generation_config)
+        response_length = int(rollouts.attention_mask[0].sum().item())
+        prompt_length = int(rollouts.prompt_lengths[0].item())
+        response_ids = rollouts.input_ids[0, prompt_length:response_length]
+        response_text = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
+        predicted = extract_first_integer(response_text)
+        correct += int(predicted == row.answer)
+        samples.append((row.question, response_text, row.answer))
+    return correct / len(examples), samples
+
+
+def sample_batch(
+    examples: list[ArithmeticExample],
+    *,
+    batch_size: int,
+    rng: random.Random,
+) -> list[ArithmeticExample]:
+    if batch_size >= len(examples):
+        return list(examples)
+    return rng.sample(examples, k=batch_size)
+
+
+def main() -> None:
+    args = parse_args()
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    rng = random.Random(args.seed)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_id)
+    tokenizer.padding_side = "right"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if args.device.startswith("cuda"):
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    else:
+        dtype = torch.float32
+    actor = HFCausalLMActor.from_pretrained(args.model_id, torch_dtype=dtype).to(args.device)
+    actor.eval()
+    trainable_parameters = set_trainable_scope(actor, args.train_scope)
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in actor.parameters() if parameter.requires_grad],
+        lr=args.learning_rate,
+    )
+
+    dataset = load_dataset(args.dataset)
+    reward_provider = make_reward_provider(tokenizer)
+    rollout_generator = LocalRolloutGenerator(
+        actor,
+        reward_provider,
+        config=LocalRolloutConfig(num_generations=args.num_generations),
+    )
+    trainer = GRPOTrainer(
+        actor,
+        optimizer,
+        rollout_generator,
+        algorithm_config=GRPOConfig(beta_kl=0.0),
+        config=GRPOTrainerConfig(
+            max_grad_norm=1.0,
+            verify_generator_logprobs=True,
+            logprob_atol=1e-5,
+            logprob_rtol=1e-5,
+        ),
+    )
+    sample_config = GenerationConfig(
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        do_sample=True,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
+    eval_config = GenerationConfig(
+        max_new_tokens=args.max_new_tokens,
+        do_sample=False,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
+
+    before_accuracy, _ = evaluate_exact_match(actor, tokenizer, dataset, eval_config)
+    print(
+        f"model={args.model_id} examples={len(dataset)} train_scope={args.train_scope} "
+        f"trainable_params={trainable_parameters:,}"
+    )
+    print(f"before_exact_match={before_accuracy:.3f}")
+
+    for step in range(args.steps):
+        batch = sample_batch(dataset, batch_size=args.batch_size, rng=rng)
+        prompts = build_prompt_batch(batch, tokenizer, device=args.device)
+        stats, _ = trainer.step(prompts, sample_config)
+        diff = float(stats.extra["generator_logprob_max_abs_diff"].item())
+        reward = 0.0 if stats.mean_reward is None else float(stats.mean_reward.item())
+        print(
+            f"step={step + 1:02d} "
+            f"loss={float(stats.loss):.4f} "
+            f"mean_reward={reward:.3f} "
+            f"generator_logprob_max_abs_diff={diff:.3e}"
+        )
+
+    after_accuracy, samples = evaluate_exact_match(actor, tokenizer, dataset, eval_config)
+    print(f"after_exact_match={after_accuracy:.3f}")
+    print("sample_generations:")
+    for question, response, answer in samples[: min(4, len(samples))]:
+        print(f"- {question} -> {response!r} (target={answer})")
+
+
+if __name__ == "__main__":
+    main()

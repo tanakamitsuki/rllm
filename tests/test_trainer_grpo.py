@@ -148,7 +148,9 @@ def test_grpo_trainer_can_verify_generator_logprobs() -> None:
     )
     generation_config = GenerationConfig(max_new_tokens=1, do_sample=False, pad_token_id=0)
 
-    trainer.step(prompts, generation_config)
+    stats, _ = trainer.step(prompts, generation_config)
+
+    assert stats.extra["generator_logprob_max_abs_diff"].item() == pytest.approx(0.0)
 
 
 @pytest.mark.slow

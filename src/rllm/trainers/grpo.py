@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import torch
@@ -55,8 +55,9 @@ class GRPOTrainer:
         generation_config: GenerationConfig,
     ) -> tuple[AlgorithmStats, RolloutBatch]:
         rollouts = self.rollout_generator.generate(prompts, generation_config)
+        logprob_stats = None
         if self.config.verify_generator_logprobs:
-            assert_actor_generator_logprobs_close(
+            logprob_stats = assert_actor_generator_logprobs_close(
                 self.actor,
                 rollouts,
                 atol=self.config.logprob_atol,
@@ -65,6 +66,16 @@ class GRPOTrainer:
         rollouts = self.algorithm.prepare_rollouts(rollouts)
         new_logprobs = self.actor.logprobs(rollouts.input_ids, rollouts.attention_mask)
         loss, stats = self.algorithm.loss(rollouts, new_logprobs)
+        if logprob_stats is not None:
+            stats = replace(
+                stats,
+                extra={
+                    **stats.extra,
+                    "generator_logprob_max_abs_diff": logprob_stats.max_abs_diff.detach(),
+                    "generator_logprob_mean_abs_diff": logprob_stats.mean_abs_diff.detach(),
+                    "generator_logprob_rms_diff": logprob_stats.rms_diff.detach(),
+                },
+            )
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
