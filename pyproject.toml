@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rllm"
+version = "0.1.0"
+description = "A small PyTorch-first reinforcement learning framework for language models."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "rllm contributors" }
+]
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.51.0",
+  "safetensors>=0.4"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5"
+]
+qwen = [
+  "accelerate>=0.33"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "integration: tests that need external checkpoints or network/cache access",
+  "slow: longer-running validation scenarios"
+]
+
