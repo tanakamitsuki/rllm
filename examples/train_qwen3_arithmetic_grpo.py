@@ -60,9 +60,21 @@ def parse_args() -> argparse.Namespace:
 def load_dataset(path: Path) -> list[ArithmeticExample]:
     examples: list[ArithmeticExample] = []
     with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            row = json.loads(line)
-            examples.append(ArithmeticExample(question=str(row["question"]), answer=int(row["answer"])))
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSON on line {line_number} of {path}: {exc.msg}") from exc
+            try:
+                examples.append(ArithmeticExample(question=str(row["question"]), answer=int(row["answer"])))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid arithmetic example on line {line_number} of {path}; "
+                    "expected `question` and integer `answer` fields"
+                ) from exc
     if not examples:
         raise ValueError(f"dataset is empty: {path}")
     return examples
