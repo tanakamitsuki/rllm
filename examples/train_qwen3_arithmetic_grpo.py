@@ -18,7 +18,7 @@ import torch
 from transformers import AutoTokenizer
 
 from rllm.algorithms.grpo import GRPOConfig
-from rllm.core.types import GenerationConfig, PromptBatch
+from rllm.core.types import GenerationConfig, PromptBatch, RolloutBatch
 from rllm.models.hf import HFCausalLMActor
 from rllm.rewards.rule import RewardExample, RuleRewardProvider
 from rllm.rollouts.local import LocalRolloutConfig, LocalRolloutGenerator
@@ -36,6 +36,14 @@ class ArithmeticExample:
     answer: int
 
 
+@dataclass(frozen=True)
+class ResponseScore:
+    predicted: int | None
+    correct: bool
+    strict_format: bool
+    reward: float
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-id", default="Qwen/Qwen3-0.6B")
@@ -49,6 +57,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--print-rollouts",
+        type=int,
+        default=4,
+        help="Number of sampled training responses to print after each step; use 0 to disable.",
+    )
     parser.add_argument(
         "--train-scope",
         choices=("lm_head", "all"),
@@ -88,6 +102,17 @@ def extract_last_integer(text: str) -> int | None:
 
 def is_strict_integer_answer(text: str) -> bool:
     return STRICT_INTEGER_PATTERN.fullmatch(text.replace(",", "")) is not None
+
+
+def score_response(response_text: str, answer: int) -> ResponseScore:
+    predicted = extract_last_integer(response_text)
+    correct = predicted == answer
+    strict_format = is_strict_integer_answer(response_text)
+    if correct:
+        return ResponseScore(predicted, correct=True, strict_format=strict_format, reward=1.0)
+    if predicted is not None and strict_format:
+        return ResponseScore(predicted, correct=False, strict_format=True, reward=0.1)
+    return ResponseScore(predicted, correct=False, strict_format=strict_format, reward=0.0)
 
 
 def format_prompt(tokenizer: object, question: str) -> str:
@@ -132,12 +157,7 @@ def make_reward_provider(tokenizer: object) -> RuleRewardProvider:
     def reward_fn(example: RewardExample) -> float:
         answer = int(example.metadata["answer"])
         response_text = tokenizer.decode(example.response_ids, skip_special_tokens=True).strip()
-        predicted = extract_last_integer(response_text)
-        if predicted == answer:
-            return 1.0
-        if predicted is not None and is_strict_integer_answer(response_text):
-            return 0.1
-        return 0.0
+        return score_response(response_text, answer).reward
 
     return RuleRewardProvider(reward_fn)
 
@@ -179,10 +199,40 @@ def evaluate_exact_match(
         prompt_length = int(rollouts.prompt_lengths[0].item())
         response_ids = rollouts.input_ids[0, prompt_length:response_length]
         response_text = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
-        predicted = extract_last_integer(response_text)
-        correct += int(predicted == row.answer)
+        score = score_response(response_text, row.answer)
+        correct += int(score.correct)
         samples.append((row.question, response_text, row.answer))
     return correct / len(examples), samples
+
+
+def print_rollout_samples(
+    rollouts: RolloutBatch,
+    prompts: PromptBatch,
+    tokenizer: object,
+    *,
+    limit: int,
+) -> None:
+    if limit <= 0:
+        return
+    print("train_rollouts:")
+    rows_to_print = min(limit, rollouts.batch_size)
+    for row in range(rows_to_print):
+        group_id = int(rollouts.group_ids[row].item())
+        answer = int(prompts.metadata[group_id]["answer"])
+        question = str(prompts.metadata[group_id]["question"])
+        response_length = int(rollouts.attention_mask[row].sum().item())
+        prompt_length = int(rollouts.prompt_lengths[row].item())
+        response_ids = rollouts.input_ids[row, prompt_length:response_length]
+        response_text = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
+        score = score_response(response_text, answer)
+        reward_text = "n/a" if rollouts.rewards is None else f"{float(rollouts.rewards[row].item()):.1f}"
+        generation_index = int(rollouts.metadata[row]["generation_index"])
+        print(
+            f"- group={group_id} sample={generation_index} "
+            f"target={answer} predicted={score.predicted} "
+            f"correct={score.correct} strict_format={score.strict_format} "
+            f"reward={reward_text} question={question!r} response={response_text!r}"
+        )
 
 
 def sample_batch(
@@ -263,7 +313,7 @@ def main() -> None:
     for step in range(args.steps):
         batch = sample_batch(dataset, batch_size=args.batch_size, rng=rng)
         prompts = build_prompt_batch(batch, tokenizer, device=args.device)
-        stats, _ = trainer.step(prompts, sample_config)
+        stats, rollouts = trainer.step(prompts, sample_config)
         diff = float(stats.extra["generator_logprob_max_abs_diff"].item())
         mean_abs_advantage = float(stats.extra["mean_abs_advantage"].item())
         nonzero_advantage_fraction = float(stats.extra["nonzero_advantage_fraction"].item())
@@ -276,6 +326,7 @@ def main() -> None:
             f"nonzero_advantage_fraction={nonzero_advantage_fraction:.3f} "
             f"generator_logprob_max_abs_diff={diff:.3e}"
         )
+        print_rollout_samples(rollouts, prompts, tokenizer, limit=args.print_rollouts)
 
     after_accuracy, samples = evaluate_exact_match(actor, tokenizer, dataset, eval_config)
     print(f"after_exact_match={after_accuracy:.3f}")

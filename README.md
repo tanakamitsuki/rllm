@@ -84,6 +84,9 @@ to update the entire actor and have enough GPU memory for full fine-tuning.
 Watch `mean_abs_advantage` as well as `loss`: with GRPO, a scalar loss near zero
 can still have gradients, while `mean_abs_advantage=0` means the sampled group
 has no relative reward signal.
+The arithmetic example prints sampled training responses by default, including
+the parsed answer, correctness, format compliance, and assigned reward. Use
+`--print-rollouts 0` to silence them.
 
 ## Design Notes
 
