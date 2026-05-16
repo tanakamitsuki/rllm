@@ -23,8 +23,7 @@ def test_actor_critic_hidden_states_match_for_identical_backbones() -> None:
 def test_actor_critic_hidden_state_diff_detects_backbone_drift() -> None:
     actor, critic = build_tiny_actor_critic(TinyCausalLMConfig(hidden_size=16, num_heads=4), seed=19)
     with torch.no_grad():
-        first_parameter = next(critic.backbone.parameters())
-        first_parameter.view(-1)[0].add_(0.5)
+        critic.backbone.embed_tokens.weight[1, 0].add_(0.5)
     input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
 
