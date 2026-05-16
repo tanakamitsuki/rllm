@@ -86,7 +86,9 @@ can still have gradients, while `mean_abs_advantage=0` means the sampled group
 has no relative reward signal.
 The arithmetic example prints sampled training responses by default, including
 the parsed answer, correctness, format compliance, and assigned reward. Use
-`--print-rollouts 0` to silence them.
+`--print-rollouts 0` to silence them. When several prompts share a batch, the
+printed samples are interleaved across groups and the script prints per-group
+reward summaries so one prompt does not hide behind another in the log.
 
 ## Design Notes
 

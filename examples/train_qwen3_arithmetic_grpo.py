@@ -214,9 +214,45 @@ def print_rollout_samples(
 ) -> None:
     if limit <= 0:
         return
+    print("train_group_rewards:")
+    for group_id in torch.unique(rollouts.group_ids, sorted=True).tolist():
+        group_mask = rollouts.group_ids == group_id
+        group_rewards = rollouts.rewards[group_mask] if rollouts.rewards is not None else None
+        answer = int(prompts.metadata[group_id]["answer"])
+        question = str(prompts.metadata[group_id]["question"])
+        if group_rewards is None:
+            reward_summary = "n/a"
+        else:
+            reward_summary = (
+                f"mean={float(group_rewards.mean().item()):.3f} "
+                f"min={float(group_rewards.min().item()):.3f} "
+                f"max={float(group_rewards.max().item()):.3f}"
+            )
+        print(f"- group={group_id} target={answer} rewards={reward_summary} question={question!r}")
+
     print("train_rollouts:")
-    rows_to_print = min(limit, rollouts.batch_size)
-    for row in range(rows_to_print):
+    rows_by_group: dict[int, list[int]] = {}
+    for row in range(rollouts.batch_size):
+        group_id = int(rollouts.group_ids[row].item())
+        rows_by_group.setdefault(group_id, []).append(row)
+
+    ordered_rows: list[int] = []
+    group_ids = sorted(rows_by_group)
+    sample_index = 0
+    while len(ordered_rows) < min(limit, rollouts.batch_size):
+        added = False
+        for group_id in group_ids:
+            group_rows = rows_by_group[group_id]
+            if sample_index < len(group_rows):
+                ordered_rows.append(group_rows[sample_index])
+                added = True
+                if len(ordered_rows) == min(limit, rollouts.batch_size):
+                    break
+        if not added:
+            break
+        sample_index += 1
+
+    for row in ordered_rows:
         group_id = int(rollouts.group_ids[row].item())
         answer = int(prompts.metadata[group_id]["answer"])
         question = str(prompts.metadata[group_id]["question"])
